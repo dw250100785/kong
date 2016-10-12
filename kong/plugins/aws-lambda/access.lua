@@ -1,5 +1,4 @@
-
---local aws_auth = require "resty.aws_auth"
+local responses = require "kong.tools.responses"
 local prepare_request = require "kong.plugins.aws-lambda.v4".prepare_request
 
 local http = require "resty.http"
@@ -56,14 +55,16 @@ function _M.execute(conf)
     body = request.body,
     headers = request.headers
   }
-
   if not res then
     ngx_log(ngx.ERR, err)
     return
   end
 
-  print(res:read_body())
+  for k, v in pairs(res.headers) do
+    ngx.header[k] = v
+  end
 
+  responses.send(res.status, res:read_body(), res.headers, true)
 end
 
 --[[

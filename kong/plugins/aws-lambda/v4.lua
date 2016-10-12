@@ -91,12 +91,38 @@ local function derive_signing_key(kSecret, Date, Region, Service)
 end
 
 local function prepare_awsv4_request(tbl)
+  local Domain = tbl.Domain or "amazonaws.com"
+  assert(type(Domain) == "string", "bad field 'Domain' (string or nil expected)")
+  local Region = tbl.Region
+  assert(type(Region) == "string", "bad field 'Region' (string expected)")
+  local Service = tbl.Service
+  assert(type(Service) == "string", "bad field 'Service' (string expected)")
+  local HTTPRequestMethod = tbl.method
+  assert(type(HTTPRequestMethod) == "string", "bad field 'method' (string expected)")
+  local CanonicalURI = tbl.CanonicalURI
   local path = tbl.path
+  if CanonicalURI == nil and path ~= nil then
+    assert(type(path) == "string", "bad field 'path' (string or nil expected)")
+    CanonicalURI = canonicalise_path(path)
+  elseif CanonicalURI == nil or CanonicalURI == "" then
+    CanonicalURI = "/"
+  end
+  assert(type(CanonicalURI) == "string", "bad field 'CanonicalURI' (string or nil expected)")
+  local CanonicalQueryString = tbl.CanonicalQueryString
   local query = tbl.query
+  if CanonicalQueryString == nil and query ~= nil then
+    assert(type(query) == "string", "bad field 'query' (string or nil expected)")
+    CanonicalQueryString = canonicalise_query_string(query)
+  end
+  assert(type(CanonicalQueryString) == "string" or CanonicalQueryString == nil, "bad field 'CanonicalQueryString' (string or nil expected)")
   local req_headers = tbl.headers or {}
+  assert(type(req_headers) == "table", "bad field 'headers' (table or nil expected)")
   local RequestPayload = tbl.body
+  assert(type(RequestPayload) == "string" or RequestPayload == nil, "bad field 'body' (string or nil expected)")
   local AccessKey = tbl.AccessKey
+  assert(type(Region) == "string", "bad field 'AccessKey' (string expected)")
   local SigningKey = tbl.SigningKey
+  assert(type(SigningKey) == "string" or SigningKey == nil, "bad field 'SigningKey' (string or nil expected)")
   local SecretKey
   if SigningKey == nil then
     SecretKey = tbl.SecretKey

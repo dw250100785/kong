@@ -43,8 +43,9 @@ describe("Plugin: AWS Lambda (access)", function()
         ["Host"] = "lambda.com"
       }
     })
-    local body = assert.res_status(403, res)
-    assert.equal([[{"message":"Cannot identify the consumer, add an authentication plugin to use the ACL plugin"}]], body)
+    local body = assert.res_status(200, res)
+    assert.is_string(res.headers["x-amzn-RequestId"])
+    assert.equal([["some_value1"]], body)
   end)
 
 end)
