@@ -2,28 +2,30 @@
 -- http://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html
 
 local resty_sha256 = require "resty.sha256"
+local pl_string = require "pl.stringx"
 local crypto = require "crypto"
+
 
 local ALGORITHM = "AWS4-HMAC-SHA256"
 
-local function HMAC(key, msg)
+local function hmac(key, msg)
   return crypto.hmac.digest("sha256", msg, key, true)
 end
 
-local function Hash(str)
+local function hash(str)
   local sha256 = resty_sha256:new()
   sha256:update(str)
   return sha256:final()
 end
 
-local HexEncode do -- From prosody's util.hex
+local hex_encode do -- From prosody's util.hex
   local char_to_hex = {};
   for i = 0, 255 do
     local char = string.char(i)
     local hex = string.format("%02x", i)
     char_to_hex[char] = hex
   end
-  function HexEncode(str)
+  function hex_encode(str)
     return (str:gsub(".", char_to_hex))
   end
 end
@@ -39,12 +41,6 @@ local urldecode do
   function urldecode(str)
     return (str:gsub("%%(%x%x)", urldecode_helper))
   end
-end
-
--- Trim 12 from http://lua-users.org/wiki/StringTrim
-local function Trimall(s)
-  local from = s:match"^%s*()"
-  return from > #s and "" or s:match(".*%S", from)
 end
 
 local function canonicalise_path(path)
@@ -82,66 +78,50 @@ local function canonicalise_query_string(query)
   return table.concat(q, "&")
 end
 
-local function derive_signing_key(kSecret, Date, Region, Service)
-  local kDate = HMAC("AWS4" .. kSecret, Date)
-  local kRegion = HMAC(kDate, Region)
-  local kService = HMAC(kRegion, Service)
-  local kSigning = HMAC(kService, "aws4_request")
+local function derive_signing_key(kSecret, date, region, service)
+  local kDate = hmac("AWS4" .. kSecret, date)
+  local kRegion = hmac(kDate, region)
+  local kService = hmac(kRegion, service)
+  local kSigning = hmac(kService, "aws4_request")
   return kSigning
 end
 
 local function prepare_awsv4_request(tbl)
-  local Domain = tbl.Domain or "amazonaws.com"
-  assert(type(Domain) == "string", "bad field 'Domain' (string or nil expected)")
-  local Region = tbl.Region
-  assert(type(Region) == "string", "bad field 'Region' (string expected)")
-  local Service = tbl.Service
-  assert(type(Service) == "string", "bad field 'Service' (string expected)")
-  local HTTPRequestMethod = tbl.method
-  assert(type(HTTPRequestMethod) == "string", "bad field 'method' (string expected)")
-  local CanonicalURI = tbl.CanonicalURI
+  local domain = tbl.domain or "amazonaws.com"
+  local region = tbl.region
+  local service = tbl.service
+  local request_method = tbl.method
+  local canonicalURI = tbl.canonicalURI
   local path = tbl.path
-  if CanonicalURI == nil and path ~= nil then
-    assert(type(path) == "string", "bad field 'path' (string or nil expected)")
-    CanonicalURI = canonicalise_path(path)
-  elseif CanonicalURI == nil or CanonicalURI == "" then
-    CanonicalURI = "/"
+  if canonicalURI == nil and path ~= nil then
+    canonicalURI = canonicalise_path(path)
+  elseif canonicalURI == nil or canonicalURI == "" then
+    canonicalURI = "/"
   end
-  assert(type(CanonicalURI) == "string", "bad field 'CanonicalURI' (string or nil expected)")
-  local CanonicalQueryString = tbl.CanonicalQueryString
+  local canonical_querystring = tbl.canonical_querystring
   local query = tbl.query
-  if CanonicalQueryString == nil and query ~= nil then
-    assert(type(query) == "string", "bad field 'query' (string or nil expected)")
-    CanonicalQueryString = canonicalise_query_string(query)
+  if canonical_querystring == nil and query ~= nil then
+    canonical_querystring = canonicalise_query_string(query)
   end
-  assert(type(CanonicalQueryString) == "string" or CanonicalQueryString == nil, "bad field 'CanonicalQueryString' (string or nil expected)")
   local req_headers = tbl.headers or {}
-  assert(type(req_headers) == "table", "bad field 'headers' (table or nil expected)")
-  local RequestPayload = tbl.body
-  assert(type(RequestPayload) == "string" or RequestPayload == nil, "bad field 'body' (string or nil expected)")
-  local AccessKey = tbl.AccessKey
-  assert(type(Region) == "string", "bad field 'AccessKey' (string expected)")
-  local SigningKey = tbl.SigningKey
-  assert(type(SigningKey) == "string" or SigningKey == nil, "bad field 'SigningKey' (string or nil expected)")
-  local SecretKey
-  if SigningKey == nil then
-    SecretKey = tbl.SecretKey
-    if SecretKey == nil then
-      assert(SecretKey, "either 'SigningKey' or 'SecretKey' must be provided")
+  local req_payload = tbl.body
+  local access_key = tbl.access_key
+  local signing_key = tbl.signing_key
+  local secret_key
+  if signing_key == nil then
+    secret_key = tbl.secret_key
+    if secret_key == nil then
+      return nil, "either 'signing_key' or 'secret_key' must be provided"
     end
-    assert(type(SecretKey) == "string", "bad field 'SecretKey' (string expected)")
   end
   local timestamp = tbl.timestamp or os.time()
-  assert(type(timestamp) == "number", "bad field 'timestamp' (number or nil expected)")
   local tls = tbl.tls
   if tls == nil then tls = true end
   local port = tbl.port or (tls and 443 or 80)
-  assert(type(port) == "number", "bad field 'port' (string or nil expected)")
+  local req_date = os.date("!%Y%m%dT%H%M%SZ", timestamp)
+  local date = os.date("!%Y%m%d", timestamp)
 
-  local RequestDate = os.date("!%Y%m%dT%H%M%SZ", timestamp)
-  local Date = os.date("!%Y%m%d", timestamp)
-
-  local host = Service .. "." .. Region .. "." .. Domain
+  local host = service .. "." .. region .. "." .. domain
   local host_header do -- If the "standard" port is not in use, the port should be added to the Host header
     local with_port
     if tls then
@@ -157,12 +137,11 @@ local function prepare_awsv4_request(tbl)
   end
 
   local headers = {
-    ["X-Amz-Date"] = RequestDate;
+    ["X-Amz-Date"] = req_date;
     Host = host_header;
   }
   local add_auth_header = true
   for k, v in pairs(req_headers) do
-    assert(type(k) == "string", "bad field 'headers' (only string keys allowed)")
     k = k:gsub("%f[^%z-]%w", string.upper) -- convert to standard header title case
     if k == "Authorization" then
       add_auth_header = false
@@ -174,65 +153,67 @@ local function prepare_awsv4_request(tbl)
 
   -- Task 1: Create a Canonical Request For Signature Version 4
   -- http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
-  local CanonicalHeaders, SignedHeaders do
+  local canonical_headers, signed_headers do
     -- We structure this code in a way so that we only have to sort once.
-    CanonicalHeaders, SignedHeaders = {}, {}
+    canonical_headers, signed_headers = {}, {}
     local i = 0
     for name, value in pairs(headers) do
       if value then -- ignore headers with 'false', they are used to override defaults
         i = i + 1
         local name_lower = name:lower()
-        SignedHeaders[i] = name_lower
-        assert(CanonicalHeaders[name_lower] == nil, "header collision")
-        CanonicalHeaders[name_lower] = Trimall(value)
+        signed_headers[i] = name_lower
+        if canonical_headers[name_lower] ~= nil then
+          return nil, "header collision"
+        end
+        canonical_headers[name_lower] = pl_string.strip(value)
       end
     end
-    table.sort(SignedHeaders)
+    table.sort(signed_headers)
     for j=1, i do
-      local name = SignedHeaders[j]
-      local value = CanonicalHeaders[name]
-      CanonicalHeaders[j] = name .. ":" .. value .. "\n"
+      local name = signed_headers[j]
+      local value = canonical_headers[name]
+      canonical_headers[j] = name .. ":" .. value .. "\n"
     end
-    SignedHeaders = table.concat(SignedHeaders, ";", 1, i)
-    CanonicalHeaders = table.concat(CanonicalHeaders, nil, 1, i)
+    signed_headers = table.concat(signed_headers, ";", 1, i)
+    canonical_headers = table.concat(canonical_headers, nil, 1, i)
   end
-  local CanonicalRequest =
-    HTTPRequestMethod .. '\n' ..
-    CanonicalURI .. '\n' ..
-    (CanonicalQueryString or "") .. '\n' ..
-    CanonicalHeaders .. '\n' ..
-    SignedHeaders .. '\n' ..
-    HexEncode(Hash(RequestPayload or ""))
+  local canonical_request =
+    request_method .. '\n' ..
+    canonicalURI .. '\n' ..
+    (canonical_querystring or "") .. '\n' ..
+    canonical_headers .. '\n' ..
+    signed_headers .. '\n' ..
+    hex_encode(hash(req_payload or ""))
 
-  local HashedCanonicalRequest = HexEncode(Hash(CanonicalRequest))
+  local hashed_canonical_request = hex_encode(hash(canonical_request))
   -- Task 2: Create a String to Sign for Signature Version 4
   -- http://docs.aws.amazon.com/general/latest/gr/sigv4-create-string-to-sign.html
-  local CredentialScope = Date .. "/" .. Region .. "/" .. Service .. "/aws4_request"
-  local StringToSign =
+  local credential_scope = date .. "/" .. region .. "/" .. service .. "/aws4_request"
+  local string_to_sign =
     ALGORITHM .. '\n' ..
-    RequestDate .. '\n' ..
-    CredentialScope .. '\n' ..
-    HashedCanonicalRequest
+    req_date .. '\n' ..
+    credential_scope .. '\n' ..
+    hashed_canonical_request
 
   -- Task 3: Calculate the AWS Signature Version 4
   -- http://docs.aws.amazon.com/general/latest/gr/sigv4-calculate-signature.html
-  if SigningKey == nil then
-    SigningKey = derive_signing_key(SecretKey, Date, Region, Service)
+  if signing_key == nil then
+    signing_key = derive_signing_key(secret_key, date, region, service)
   end
-  local Signature = HexEncode(HMAC(SigningKey, StringToSign))
+  local signature = hex_encode(hmac(signing_key, string_to_sign))
   -- Task 4: Add the Signing Information to the Request
   -- http://docs.aws.amazon.com/general/latest/gr/sigv4-add-signature-to-request.html
-  local Authorization = ALGORITHM
-    .. " Credential=" .. AccessKey .."/" .. CredentialScope
-    .. ", SignedHeaders=" .. SignedHeaders
-    .. ", Signature=" .. Signature
+  local authorization = ALGORITHM
+    .. " Credential=" .. access_key .."/" .. credential_scope
+    .. ", SignedHeaders=" .. signed_headers
+    .. ", Signature=" .. signature
   if add_auth_header then
-    headers.Authorization = Authorization
+    headers.Authorization = authorization
   end
 
-  local target = path or CanonicalURI
-  if query or CanonicalQueryString then
-    target = target .. "?" .. (query or CanonicalQueryString)
+  local target = path or canonicalURI
+  if query or canonical_querystring then
+    target = target .. "?" .. (query or canonical_querystring)
   end
   local scheme = tls and "https" or "http"
   local url = scheme .. "://" .. host_header .. target
@@ -242,20 +223,10 @@ local function prepare_awsv4_request(tbl)
     host = host;
     port = port;
     tls = tls;
-    method = HTTPRequestMethod;
+    method = request_method;
     target = target;
     headers = headers;
-    body = RequestPayload;
-  }, {
-    CanonicalURI = CanonicalURI;
-    CanonicalQueryString = CanonicalQueryString;
-    SignedHeaders = SignedHeaders;
-    CanonicalHeaders = CanonicalHeaders;
-    CanonicalRequest = CanonicalRequest;
-    StringToSign = StringToSign;
-    SigningKey = SigningKey;
-    Signature = Signature;
-    Authorization = Authorization;
+    body = req_payload;
   }
 end
 

@@ -22,8 +22,8 @@ function _M.execute(conf)
                             conf.function_name)
 
   local opts = {
-    Region = conf.aws_region,
-    Service = "lambda",
+    region = conf.aws_region,
+    service = "lambda",
     method = "POST",
     headers = {
       ["X-Amz-Target"] = "invoke",
@@ -32,13 +32,15 @@ function _M.execute(conf)
     },
     body = bodyJson, 
     path = path,
-    AccessKey = conf.aws_key,
-    SecretKey = conf.aws_secret,
+    access_key = conf.aws_key,
+    secret_key = conf.aws_secret,
     query = conf.qualifier and "Qualifier="..conf.qualifier
   }
 
-  local request, _ = prepare_request(opts)
-
+  local request, err = prepare_request(opts)
+  if err then
+    return responses.send_HTTP_INTERNAL_SERVER_ERROR(err)
+  end
   
   local client = http.new()
   client:connect(host, 443)
@@ -56,8 +58,7 @@ function _M.execute(conf)
     headers = request.headers
   }
   if not res then
-    ngx_log(ngx.ERR, err)
-    return
+    return responses.send_HTTP_INTERNAL_SERVER_ERROR(err.message)
   end
 
   for k, v in pairs(res.headers) do
